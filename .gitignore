@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+sample_data/raw/
+sample_data/processed/
+sample_data/runs/
