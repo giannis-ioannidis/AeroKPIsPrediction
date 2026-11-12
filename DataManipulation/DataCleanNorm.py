@@ -1,37 +1,59 @@
+"""Clean and min-max normalise the feature CSVs produced by ToCSV/*ToCSV.py.
+
+Reads  <data-dir>/<Set>Train.csv and <data-dir>/<Set>Test.csv
+Writes <data-dir>/<Set>TrainNorm.csv and <data-dir>/<Set>TestNorm.csv
+
+Normalisation statistics (min, max, fill values) come from the train set only.
+The last two columns (Cost_Index, Max_Payload) are labels and are not normalised.
+
+Usage:
+    python DataManipulation/DataCleanNorm.py --set ppr --data-dir sample_data/processed
+"""
+import argparse
+import os
+
 import pandas as pd
-import numpy as np
 
-#load dfs
-train_df = pd.read_csv('PprTrain.csv')
-test_df = pd.read_csv('PprTest.csv')
+LABELS = ['Cost_Index', 'Max_Payload']
+# 9 sub-phases x features per sub-phase
+N_FEATURES = {'ppr': 9 * 17, 'opr': 9 * 23}
 
-#search for nas
-train_df.isnull().sum().any()
-test_df.isnull().sum().any()
 
-#drop nas
-train_cleandf = train_df.dropna()
-#test_cleandf = test_df.dropna()
-for i in test_df.columns[test_df.isnull().any(axis=0)]:     #---Applying Only on variables with NaN values
-    test_df[i].fillna(test_df[i].mean(),inplace=True)
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--set', required=True, choices=sorted(N_FEATURES))
+    parser.add_argument('--data-dir', default='sample_data/processed')
+    args = parser.parse_args()
 
-#check clean dataframe for nas
-train_cleandf.isnull().sum().any()
-test_cleandf.isnull().sum().any()
+    prefix = os.path.join(args.data_dir, args.set.capitalize())
+    train_df = pd.read_csv(prefix + 'Train.csv')
+    test_df = pd.read_csv(prefix + 'Test.csv')
 
-#use train set statistics
-train_min = np.min(train_cleandf[train_cleandf.columns[:-2]])
-train_max = np.max(train_cleandf[train_cleandf.columns[:-2]])
+    features = [c for c in train_df.columns if c not in LABELS]
+    assert len(features) == N_FEATURES[args.set], \
+        f'expected {N_FEATURES[args.set]} features, found {len(features)}'
+    assert list(test_df.columns) == list(train_df.columns), 'train/test columns differ'
 
-#normalization
-def NormalizeData(data):
-    out = (data[data.columns[:-2]] - train_min) / (train_max - train_min)
-    out['Cost_Index'] = data['Cost_Index']
-    out['Max_Payload'] = data['Max_Payload']
-    #out['Flight_ID'] = data['Flight_ID']
-    out = out.drop('Unnamed: 0', axis=1)
-    return out
+    # drop incomplete train rows; fill test gaps with the train mean
+    n_before = len(train_df)
+    train_df = train_df.dropna().reset_index(drop=True)
+    test_df[features] = test_df[features].fillna(train_df[features].mean())
+    test_df = test_df.dropna(subset=LABELS).reset_index(drop=True)
 
-#apply
-#norm_train_data = NormalizeData(train_cleandf)
-norm_test_data = NormalizeData(test_cleandf)
+    # min-max scaling with train statistics; constant columns map to 0
+    train_min = train_df[features].min()
+    span = train_df[features].max() - train_min
+    span = span.where(span != 0, 1)
+
+    for df, split in ((train_df, 'Train'), (test_df, 'Test')):
+        df[features] = (df[features] - train_min) / span
+        out = prefix + split + 'Norm.csv'
+        df.to_csv(out, index=False)
+        print(f'{out}: {len(df)} rows, {len(features)} features')
+
+    print(f'Dropped {n_before - len(train_df)} train rows with missing values')
+
+
+if __name__ == '__main__':
+    main()
